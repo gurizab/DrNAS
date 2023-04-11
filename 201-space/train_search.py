@@ -32,7 +32,7 @@ parser = argparse.ArgumentParser("sota")
 parser.add_argument("--experiment_name", type=str,
                     default="drnas_vs_drstn")
 parser.add_argument('--data', type=str, default='datapath', help='location of the data corpus')
-parser.add_argument('--dataset', type=str, default='cifar10', help='choose dataset')
+parser.add_argument('--dataset', type=str, default='imagenet16-120', help='choose dataset')
 parser.add_argument('--method', type=str, default='dirichlet', help='choose nas method')
 parser.add_argument('--batch_size', type=int, default=64, help='batch size')
 parser.add_argument('--learning_rate', type=float, default=0.025, help='init learning rate')
@@ -75,6 +75,8 @@ else:
 run_name = "DrNAS_default_hyperparameters_dataset_{}_seed_{}_100archablation".format(args.dataset, args.seed)
 
 
+# run_name="test_imagenet"
+
 def distill(result):
     result = result.split('\n')
     cifar10 = result[5].replace(' ', '').split(':')
@@ -112,7 +114,7 @@ def main():
                name=run_name,
                tensorboard=True,
                dir=os.getcwd() if args.save_dir is None else args.save_dir,
-               # settings=wandb.Settings(start_method="fork"),
+               settings=wandb.Settings(start_method="fork"),
                config=args)
     architectures = {f"architecture_{i + 1}": [] for i in range(100)}
     if not 'debug' in args.save:
@@ -163,7 +165,7 @@ def main():
         lists = [transforms.RandomHorizontalFlip(), transforms.RandomCrop(16, padding=2), transforms.ToTensor(),
                  transforms.Normalize(mean, std)]
         train_transform = transforms.Compose(lists)
-        train_data = ImageNet16(root=os.path.join(args.data, 'imagenet16'), train=True, transform=train_transform,
+        train_data = ImageNet16(root="datapath/Imagenet16", train=True, transform=train_transform,
                                 use_num_of_class_only=120)
         assert len(train_data) == 151700
 
@@ -215,9 +217,10 @@ def main():
             for i in range(100):
                 architecure_name = f"architecture_{i + 1}"
                 result_100 = api.query_by_arch(model.genotype_100(), "200")
-                 cifar10_train_100, cifar10_test_100, cifar100_train_100, cifar100_valid_100, \
-                cifar100_test_100, imagenet16_train_100, imagenet16_valid_100, imagenet16_test_100 = distill(result_100)
-                 if args.dataset == "cifar10":
+                cifar10_train_100, cifar10_test_100, cifar100_train_100, cifar100_valid_100, \
+                    cifar100_test_100, imagenet16_train_100, imagenet16_valid_100, imagenet16_test_100 = distill(
+                    result_100)
+                if args.dataset == "cifar10":
                     nb201_acc = cifar10_test_100
                 elif args.dataset == "cifar100":
                     nb201_acc = cifar100_test_100
