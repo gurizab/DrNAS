@@ -116,7 +116,7 @@ def main():
                config=args)
     architectures = {f"architecture_{i + 1}": [] for i in range(100)}
     if not 'debug' in args.save:
-        api = API('pth file path')
+        api = API('NAS-Bench-201-v1_1-096897.pth')
     criterion = nn.CrossEntropyLoss()
     criterion = criterion.cuda()
 
@@ -201,6 +201,7 @@ def main():
         # validation
         valid_acc, valid_obj = infer(valid_queue, model, criterion)
         logging.info('valid_acc %f', valid_acc)
+        nb201_acc = None
 
         if not 'debug' in args.save:
             # nasbench201
@@ -214,8 +215,16 @@ def main():
             for i in range(100):
                 architecure_name = f"architecture_{i + 1}"
                 result_100 = api.query_by_arch(model.genotype_100(), "200")
-                _, cifar10_test_100, _, _, _, _, _, _ = distill(result_100)
-                architectures[architecure_name].append(cifar10_test_100)
+                 cifar10_train_100, cifar10_test_100, cifar100_train_100, cifar100_valid_100, \
+                cifar100_test_100, imagenet16_train_100, imagenet16_valid_100, imagenet16_test_100 = distill(result_100)
+                 if args.dataset == "cifar10":
+                    nb201_acc = cifar10_test_100
+                elif args.dataset == "cifar100":
+                    nb201_acc = cifar100_test_100
+                else:
+                    nb201_acc = imagenet16_test_100
+
+                architectures[architecure_name].append(nb201_acc)
 
             # # tensorboard
             # writer.add_scalars('accuracy', {'train':train_acc,'valid':valid_acc}, epoch)
