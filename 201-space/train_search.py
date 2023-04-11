@@ -15,6 +15,7 @@ import torch.nn.functional as F
 import torchvision.datasets as dset
 import torch.backends.cudnn as cudnn
 import wandb
+import csv
 
 from torch.autograd import Variable
 from search_model_gdas import TinyNetworkGDAS
@@ -25,7 +26,6 @@ from architect import Architect
 from copy import deepcopy
 from numpy import linalg as LA
 
-from torch.utils.tensorboard import SummaryWriter
 from nas_201_api import NASBench201API as API
 
 parser = argparse.ArgumentParser("sota")
@@ -56,6 +56,8 @@ parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weigh
 parser.add_argument('--tau_max', type=float, default=10, help='Max temperature (tau) for the gumbel softmax.')
 parser.add_argument('--tau_min', type=float, default=1, help='Min temperature (tau) for the gumbel softmax.')
 parser.add_argument('--k', type=int, default=1, help='partial channel parameter')
+parser.add_argument("--save_dir", type=str, default=None)
+
 #### regularization
 parser.add_argument('--reg_type', type=str, default='l2', choices=[
     'l2', 'kl'], help='regularization type, kl is implemented for dirichlet only')
@@ -110,7 +112,7 @@ def main():
                name=run_name,
                tensorboard=True,
                dir=os.getcwd() if args.save_dir is None else args.save_dir,
-               settings=wandb.Settings(start_method="fork"),
+               # settings=wandb.Settings(start_method="fork"),
                config=args)
     architectures = {f"architecture_{i + 1}": [] for i in range(100)}
     if not 'debug' in args.save:
@@ -209,6 +211,11 @@ def main():
             logging.info('cifar10 train %f test %f', cifar10_train, cifar10_test)
             logging.info('cifar100 train %f valid %f test %f', cifar100_train, cifar100_valid, cifar100_test)
             logging.info('imagenet16 train %f valid %f test %f', imagenet16_train, imagenet16_valid, imagenet16_test)
+            for i in range(100):
+                architecure_name = f"architecture_{i + 1}"
+                result_100 = api.query_by_arch(model.genotype_100(), "200")
+                _, cifar10_test_100, _, _, _, _, _, _ = distill(result_100)
+                architectures[architecure_name].append(cifar10_test_100)
 
             # # tensorboard
             # writer.add_scalars('accuracy', {'train':train_acc,'valid':valid_acc}, epoch)
@@ -248,6 +255,14 @@ def main():
             tau_epoch += tau_step
             logging.info('tau %f', tau_epoch)
             model.set_tau(tau_epoch)
+    with open(f'architectures_{args.dataset}_{args.seed}.csv', 'w', newline='') as csvfile:
+        fieldnames = ['architecture', 'epoch', 'accuracy']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        writer.writeheader()
+        for architecture, accuracies in architectures.items():
+            for epoch, acc in enumerate(accuracies, start=0):
+                writer.writerow({'architecture': architecture, 'epoch': epoch, 'accuracy': acc})
 
     # writer.close()
 
