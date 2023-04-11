@@ -1,5 +1,6 @@
 import os
 import sys
+
 sys.path.insert(0, '../')
 import time
 import glob
@@ -13,6 +14,7 @@ import torch.utils
 import torch.nn.functional as F
 import torchvision.datasets as dset
 import torch.backends.cudnn as cudnn
+import wandb
 
 from torch.autograd import Variable
 from search_model_gdas import TinyNetworkGDAS
@@ -26,8 +28,9 @@ from numpy import linalg as LA
 from torch.utils.tensorboard import SummaryWriter
 from nas_201_api import NASBench201API as API
 
-
 parser = argparse.ArgumentParser("sota")
+parser.add_argument("--experiment_name", type=str,
+                    default="drnas_vs_drstn")
 parser.add_argument('--data', type=str, default='datapath', help='location of the data corpus')
 parser.add_argument('--dataset', type=str, default='cifar10', help='choose dataset')
 parser.add_argument('--method', type=str, default='dirichlet', help='choose nas method')
@@ -55,34 +58,10 @@ parser.add_argument('--tau_min', type=float, default=1, help='Min temperature (t
 parser.add_argument('--k', type=int, default=1, help='partial channel parameter')
 #### regularization
 parser.add_argument('--reg_type', type=str, default='l2', choices=[
-                    'l2', 'kl'], help='regularization type, kl is implemented for dirichlet only')
+    'l2', 'kl'], help='regularization type, kl is implemented for dirichlet only')
 parser.add_argument('--reg_scale', type=float, default=1e-3,
                     help='scaling factor of the regularization term, default value is proper for l2, for kl you might adjust reg_scale to match l2')
 args = parser.parse_args()
-
-args.save = '../experiments/nasbench201/{}-search-{}-{}-{}'.format(
-    args.method, args.save, time.strftime("%Y%m%d-%H%M%S"), args.seed)
-if not args.dataset == 'cifar10':
-    args.save += '-' + args.dataset
-if args.unrolled:
-    args.save += '-unrolled'
-if not args.weight_decay == 3e-4:
-    args.save += '-weight_l2-' + str(args.weight_decay)
-if not args.arch_weight_decay == 1e-3:
-    args.save += '-alpha_l2-' + str(args.arch_weight_decay)
-if not args.method == 'gdas':
-    args.save += '-pc-' + str(args.k)
-
-utils.create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
-
-log_format = '%(asctime)s %(message)s'
-logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-    format=log_format, datefmt='%m/%d %I:%M:%S %p')
-fh = logging.FileHandler(os.path.join(args.save, 'log.txt'))
-fh.setFormatter(logging.Formatter(log_format))
-logging.getLogger().addHandler(fh)
-writer = SummaryWriter(args.save + '/runs')
-
 
 if args.dataset == 'cifar100':
     n_classes = 100
@@ -90,6 +69,8 @@ elif args.dataset == 'imagenet16-120':
     n_classes = 120
 else:
     n_classes = 10
+
+run_name = "DrNAS_default_hyperparameters_dataset_{}_seed_{}_100archablation".format(args.dataset, args.seed)
 
 
 def distill(result):
@@ -125,7 +106,13 @@ def main():
     torch.cuda.manual_seed(args.seed)
     logging.info('gpu device = %d' % args.gpu)
     logging.info("args = %s", args)
-    
+    wandb.init(project=args.experiment_name,
+               name=run_name,
+               tensorboard=True,
+               dir=os.getcwd() if args.save_dir is None else args.save_dir,
+               settings=wandb.Settings(start_method="fork"),
+               config=args)
+    architectures = {f"architecture_{i + 1}": [] for i in range(100)}
     if not 'debug' in args.save:
         api = API('pth file path')
     criterion = nn.CrossEntropyLoss()
@@ -136,7 +123,8 @@ def main():
         tau_step = (args.tau_min - args.tau_max) / args.epochs
         tau_epoch = args.tau_max
         if args.method == 'gdas':
-            model = TinyNetworkGDAS(C=args.init_channels, N=5, max_nodes=4, num_classes=n_classes, criterion=criterion, search_space=NAS_BENCH_201)
+            model = TinyNetworkGDAS(C=args.init_channels, N=5, max_nodes=4, num_classes=n_classes, criterion=criterion,
+                                    search_space=NAS_BENCH_201)
         else:
             model = TinyNetwork(C=args.init_channels, N=5, max_nodes=4, num_classes=n_classes,
                                 criterion=criterion, search_space=NAS_BENCH_201, k=args.k, species='gumbel')
@@ -167,12 +155,14 @@ def main():
         train_data = dset.SVHN(root=args.data, split='train', download=True, transform=train_transform)
     elif args.dataset == 'imagenet16-120':
         import torchvision.transforms as transforms
-        from nasbench201.DownsampledImageNet import ImageNet16
+        from DownsampledImageNet import ImageNet16
         mean = [x / 255 for x in [122.68, 116.66, 104.01]]
-        std = [x / 255 for x in [63.22,  61.26, 65.09]]
-        lists = [transforms.RandomHorizontalFlip(), transforms.RandomCrop(16, padding=2), transforms.ToTensor(), transforms.Normalize(mean, std)]
+        std = [x / 255 for x in [63.22, 61.26, 65.09]]
+        lists = [transforms.RandomHorizontalFlip(), transforms.RandomCrop(16, padding=2), transforms.ToTensor(),
+                 transforms.Normalize(mean, std)]
         train_transform = transforms.Compose(lists)
-        train_data = ImageNet16(root=os.path.join(args.data,'imagenet16'), train=True, transform=train_transform, use_num_of_class_only=120)
+        train_data = ImageNet16(root=os.path.join(args.data, 'imagenet16'), train=True, transform=train_transform,
+                                use_num_of_class_only=120)
         assert len(train_data) == 151700
 
     num_train = len(train_data)
@@ -212,7 +202,7 @@ def main():
 
         if not 'debug' in args.save:
             # nasbench201
-            result = api.query_by_arch(model.genotype())
+            result = api.query_by_arch(model.genotype(), "200")
             logging.info('{:}'.format(result))
             cifar10_train, cifar10_test, cifar100_train, cifar100_valid, \
                 cifar100_test, imagenet16_train, imagenet16_valid, imagenet16_test = distill(result)
@@ -220,19 +210,37 @@ def main():
             logging.info('cifar100 train %f valid %f test %f', cifar100_train, cifar100_valid, cifar100_test)
             logging.info('imagenet16 train %f valid %f test %f', imagenet16_train, imagenet16_valid, imagenet16_test)
 
-            # tensorboard
-            writer.add_scalars('accuracy', {'train':train_acc,'valid':valid_acc}, epoch)
-            writer.add_scalars('loss', {'train':train_obj,'valid':valid_obj}, epoch)
-            writer.add_scalars('nasbench201/cifar10', {'train':cifar10_train,'test':cifar10_test}, epoch)
-            writer.add_scalars('nasbench201/cifar100', {'train':cifar100_train,'valid':cifar100_valid, 'test':cifar100_test}, epoch)
-            writer.add_scalars('nasbench201/imagenet16', {'train':imagenet16_train,'valid':imagenet16_valid, 'test':imagenet16_test}, epoch)
-
-            utils.save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'alpha': model.arch_parameters()
-            }, False, args.save)
+            # # tensorboard
+            # writer.add_scalars('accuracy', {'train':train_acc,'valid':valid_acc}, epoch)
+            # writer.add_scalars('loss', {'train':train_obj,'valid':valid_obj}, epoch)
+            # writer.add_scalars('nasbench201/cifar10', {'train':cifar10_train,'test':cifar10_test}, epoch)
+            # writer.add_scalars('nasbench201/cifar100', {'train':cifar100_train,'valid':cifar100_valid, 'test':cifar100_test}, epoch)
+            # writer.add_scalars('nasbench201/imagenet16', {'train':imagenet16_train,'valid':imagenet16_valid, 'test':imagenet16_test}, epoch)
+            #
+            # utils.save_checkpoint({
+            #     'epoch': epoch + 1,
+            #     'state_dict': model.state_dict(),
+            #     'optimizer': optimizer.state_dict(),
+            #     'alpha': model.arch_parameters()
+            # }, False, args.save)
+            nb201_train = None
+            nb201_test = None
+            if args.dataset == "cifar10":
+                nb201_train = cifar10_train
+                nb201_test = cifar10_test
+            elif args.dataset == "cifar100":
+                nb201_train = cifar100_train
+                nb201_test = cifar100_test
+            else:
+                nb201_train = imagenet16_train
+                nb201_test = imagenet16_test
+            epoch_dict = {"Epoch": epoch,
+                          "Train Loss": train_obj,
+                          "Val Loss": valid_obj,
+                          "Val Acc": valid_acc,
+                          "nb201_train_acc": nb201_train,
+                          "nb201_test_acc": nb201_test}
+            wandb.log(epoch_dict)
 
         scheduler.step()
         if args.method == 'gdas' or args.method == 'snas':
@@ -241,7 +249,7 @@ def main():
             logging.info('tau %f', tau_epoch)
             model.set_tau(tau_epoch)
 
-    writer.close()
+    # writer.close()
 
 
 def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, epoch):
@@ -260,7 +268,7 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, 
         input_search, target_search = next(iter(valid_queue))
         input_search = input_search.cuda()
         target_search = target_search.cuda(non_blocking=True)
-        
+
         # if epoch >= 15:
         architect.step(input, target, input_search, target_search, lr, optimizer, unrolled=args.unrolled)
         optimizer.zero_grad()
@@ -285,7 +293,7 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, 
         if 'debug' in args.save:
             break
 
-    return  top1.avg, objs.avg
+    return top1.avg, objs.avg
 
 
 def infer(valid_queue, model, criterion):
